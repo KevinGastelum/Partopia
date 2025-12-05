@@ -1,6 +1,6 @@
 # **Partopia PRD - Streamlined Build Guide**
 **Version:** 1.0 Development Ready  
-**Focus:** Weeks 1-8 MVP Deployment
+**Focus:** ws 1-8 MVP Deployment
 
 ---
 
@@ -59,7 +59,7 @@ function scrapeWithTor(url) {
 3. Use `tor-request` npm package
 4. 1000+ exit nodes = virtually unlimited IPs
 
-**Approach 2: Residential Proxy Chain (Free Tier Stacking)**
+<!-- **Approach 2: Residential Proxy Chain (Free Tier Stacking)**
 - **ProxyScrape:** Free rotating proxies (updated daily)
 - **Free-Proxy-List:** 300+ proxies scraped hourly
 - **Public proxy aggregator:** Combine 5-6 free sources
@@ -107,7 +107,7 @@ function distributeRequest(url) {
 **Best Hybrid Solution:**
 1. **Primary:** Tor Network (free, unlimited IPs)
 2. **Backup:** Free cloud VMs (Oracle + GCP credits)
-3. **Last Resort:** Free proxy aggregators
+3. **Last Resort:** Free proxy aggregators -->
 
 **Rate Limiting Strategy:**
 - 1 request per 3-5 seconds per IP
@@ -121,11 +121,19 @@ function distributeRequest(url) {
 
 ```sql
 -- Run this in Supabase SQL Editor
-
--- Enable extensions
+-- Enable required extensions (run this first!)
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 CREATE EXTENSION IF NOT EXISTS "pg_trgm";
 CREATE EXTENSION IF NOT EXISTS "btree_gin";
+CREATE EXTENSION IF NOT EXISTS "cube";          -- ← required
+CREATE EXTENSION IF NOT EXISTS "earthdistance"; -- ← required for location search
+
+
+
+-- STEP 2 run seperately
+-- =============================================
+-- PC PARTS MARKETPLACE – 100% WORKING ON SUPABASE (Dec 2025)
+-- =============================================
 
 -- ENUMS
 CREATE TYPE part_condition AS ENUM ('new', 'excellent', 'good', 'fair', 'poor', 'for_parts');
@@ -134,8 +142,8 @@ CREATE TYPE offer_status AS ENUM ('pending', 'accepted', 'rejected', 'countered'
 CREATE TYPE shipping_method AS ENUM ('local_pickup_only', 'buyer_pays_shipping', 'free_shipping', 'shipping_included');
 CREATE TYPE transaction_type AS ENUM ('buy_now', 'auction', 'make_offer');
 
--- 1. Profiles (extends auth.users)
-CREATE TABLE public.profiles (
+-- 1. Profiles
+CREATE TABLE IF NOT EXISTS public.profiles (
   id UUID PRIMARY KEY REFERENCES auth.users ON DELETE CASCADE,
   username TEXT UNIQUE,
   full_name TEXT,
@@ -154,16 +162,15 @@ CREATE TABLE public.profiles (
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- 2. Brands
-CREATE TABLE brands (
+-- 2. Brands & Categories
+CREATE TABLE IF NOT EXISTS brands (
   id SERIAL PRIMARY KEY,
   name TEXT UNIQUE NOT NULL,
   slug TEXT UNIQUE NOT NULL,
   logo_url TEXT
 );
 
--- 3. Categories
-CREATE TABLE categories (
+CREATE TABLE IF NOT EXISTS categories (
   id SERIAL PRIMARY KEY,
   name TEXT UNIQUE NOT NULL,
   slug TEXT UNIQUE NOT NULL,
@@ -171,80 +178,43 @@ CREATE TABLE categories (
   sort_order INT DEFAULT 0
 );
 
--- 4. Parts Master Table
-CREATE TABLE parts (
+-- 3. Parts (no generated column with subquery → uses trigger instead)
+CREATE TABLE IF NOT EXISTS parts (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   category_id INT REFERENCES categories(id) ON DELETE RESTRICT,
   brand_id INT REFERENCES brands(id),
   model TEXT NOT NULL,
   release_year INT,
   msrp NUMERIC(10,2),
-  search_text TEXT GENERATED ALWAYS AS (
-    COALESCE(model, '') || ' ' ||
-    COALESCE((SELECT name FROM brands b WHERE b.id = parts.brand_id), '')
-  ) STORED,
+  search_text TEXT,  -- maintained by trigger
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- 5. GPU Specs
-CREATE TABLE gpu_specs (
-  part_id UUID PRIMARY KEY REFERENCES parts(id) ON DELETE CASCADE,
-  architecture TEXT,
-  memory_gb INT,
-  memory_type TEXT,
-  core_clock_mhz INT,
-  boost_clock_mhz INT,
-  tdp INT,
-  length_mm INT,
-  ports TEXT[],
-  cooling TEXT
-);
+-- Trigger: auto-fill search_text
+CREATE OR REPLACE FUNCTION update_parts_search_text()
+RETURNS TRIGGER AS $$
+BEGIN
+  NEW.search_text := 
+    COALESCE(NEW.model, '') || ' ' ||
+    COALESCE((SELECT name FROM brands b WHERE b.id = NEW.brand_id), '');
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
 
--- 6. CPU Specs
-CREATE TABLE cpu_specs (
-  part_id UUID PRIMARY KEY REFERENCES parts(id) ON DELETE CASCADE,
-  socket TEXT NOT NULL,
-  cores INT,
-  threads INT,
-  base_clock_ghz NUMERIC(4,2),
-  boost_clock_ghz NUMERIC(4,2),
-  integrated_graphics BOOLEAN DEFAULT FALSE,
-  tdp INT
-);
+DROP TRIGGER IF EXISTS trig_parts_search ON parts;
+CREATE TRIGGER trig_parts_search
+  BEFORE INSERT OR UPDATE ON parts
+  FOR EACH ROW EXECUTE FUNCTION update_parts_search_text();
 
--- 7. Motherboard Specs
-CREATE TABLE motherboard_specs (
-  part_id UUID PRIMARY KEY REFERENCES parts(id) ON DELETE CASCADE,
-  socket TEXT NOT NULL,
-  chipset TEXT,
-  form_factor TEXT,
-  memory_type TEXT CHECK (memory_type IN ('DDR4', 'DDR5', 'DDR3')),
-  memory_slots INT,
-  max_memory_gb INT,
-  m2_slots INT
-);
+-- Spec tables (unchanged – you can add more later)
+CREATE TABLE IF NOT EXISTS gpu_specs (      part_id UUID PRIMARY KEY REFERENCES parts(id) ON DELETE CASCADE, architecture TEXT, memory_gb INT, memory_type TEXT, core_clock_mhz INT, boost_clock_mhz INT, tdp INT, length_mm INT, ports TEXT[], cooling TEXT);
+CREATE TABLE IF NOT EXISTS cpu_specs (      part_id UUID PRIMARY KEY REFERENCES parts(id) ON DELETE CASCADE, socket TEXT NOT NULL, cores INT, threads INT, base_clock_ghz NUMERIC(4,2), boost_clock_ghz NUMERIC(4,2), integrated_graphics BOOLEAN DEFAULT FALSE, tdp INT);
+CREATE TABLE IF NOT EXISTS motherboard_specs(part_id UUID PRIMARY KEY REFERENCES parts(id) ON DELETE CASCADE, socket TEXT NOT NULL, chipset TEXT, form_factor TEXT, memory_type TEXT CHECK (memory_type IN ('DDR3','DDR4','DDR5')), memory_slots INT, max_memory_gb INT, m2_slots INT);
+CREATE TABLE IF NOT EXISTS ram_specs (      part_id UUID PRIMARY KEY REFERENCES parts(id) ON DELETE CASCADE, type TEXT NOT NULL CHECK (type IN ('DDR3','DDR4','DDR5','LPDDR5')), speed_mhz INT, capacity_gb INT, modules INT DEFAULT 1, rgb BOOLEAN DEFAULT FALSE);
+CREATE TABLE IF NOT EXISTS storage_specs (  part_id UUID PRIMARY KEY REFERENCES parts(id) ON DELETE CASCADE, drive_type TEXT CHECK (drive_type IN ('SSD', 'HDD', 'NVMe')), interface TEXT, capacity_gb BIGINT, form_factor TEXT);
 
--- 8. RAM Specs
-CREATE TABLE ram_specs (
-  part_id UUID PRIMARY KEY REFERENCES parts(id) ON DELETE CASCADE,
-  type TEXT NOT NULL CHECK (type IN ('DDR3','DDR4','DDR5','LPDDR5')),
-  speed_mhz INT,
-  capacity_gb INT,
-  modules INT DEFAULT 1,
-  rgb BOOLEAN DEFAULT FALSE
-);
-
--- 9. Storage Specs
-CREATE TABLE storage_specs (
-  part_id UUID PRIMARY KEY REFERENCES parts(id) ON DELETE CASCADE,
-  drive_type TEXT CHECK (drive_type IN ('SSD', 'HDD', 'NVMe')),
-  interface TEXT,
-  capacity_gb BIGINT,
-  form_factor TEXT
-);
-
--- 10. Listings
-CREATE TABLE listings (
+-- 4. Listings
+CREATE TABLE IF NOT EXISTS listings (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   seller_id UUID REFERENCES auth.users NOT NULL,
   part_id UUID REFERENCES parts(id) ON DELETE SET NULL,
@@ -268,108 +238,76 @@ CREATE TABLE listings (
   sold_at TIMESTAMPTZ
 );
 
--- 11. Listing Images
-CREATE TABLE listing_images (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  listing_id UUID REFERENCES listings(id) ON DELETE CASCADE,
-  url TEXT NOT NULL,
-  sort_order INT DEFAULT 0,
-  is_cover BOOLEAN DEFAULT FALSE
-);
+-- Rest of tables
+CREATE TABLE IF NOT EXISTS listing_images ( id UUID PRIMARY KEY DEFAULT uuid_generate_v4(), listing_id UUID REFERENCES listings(id) ON DELETE CASCADE, url TEXT NOT NULL, sort_order INT DEFAULT 0, is_cover BOOLEAN DEFAULT FALSE);
+CREATE TABLE IF NOT EXISTS offers (         id UUID PRIMARY KEY DEFAULT uuid_generate_v4(), listing_id UUID REFERENCES listings(id) ON DELETE CASCADE, buyer_id UUID REFERENCES auth.users NOT NULL, amount NUMERIC(10,2) NOT NULL, message TEXT, status offer_status DEFAULT 'pending', created_at TIMESTAMPTZ DEFAULT NOW(), updated_at TIMESTAMPTZ DEFAULT NOW());
+CREATE TABLE IF NOT EXISTS conversations ( id UUID PRIMARY KEY DEFAULT uuid_generate_v4(), listing_id UUID REFERENCES listings(id) ON DELETE CASCADE, buyer_id UUID REFERENCES auth.users, seller_id UUID REFERENCES auth.users, last_message_at TIMESTAMPTZ DEFAULT NOW(), last_message_preview TEXT);
+CREATE TABLE IF NOT EXISTS messages (       id UUID PRIMARY KEY DEFAULT uuid_generate_v4(), conversation_id UUID REFERENCES conversations(id) ON DELETE CASCADE, sender_id UUID REFERENCES auth.users NOT NULL, content TEXT NOT NULL, is_read BOOLEAN DEFAULT FALSE, created_at TIMESTAMPTZ DEFAULT NOW());
+CREATE TABLE IF NOT EXISTS watchlist (      user_id UUID REFERENCES auth.users ON DELETE CASCADE, listing_id UUID REFERENCES listings(id) ON DELETE CASCADE, created_at TIMESTAMPTZ DEFAULT NOW(), PRIMARY KEY (user_id, listing_id));
+CREATE TABLE IF NOT EXISTS reviews (        id UUID PRIMARY KEY DEFAULT uuid_generate_v4(), listing_id UUID REFERENCES listings(id), reviewer_id UUID REFERENCES auth.users, seller_id UUID REFERENCES auth.users, rating INT CHECK (rating >= 1 AND rating <= 5), comment TEXT, created_at TIMESTAMPTZ DEFAULT NOW());
 
--- 12. Offers
-CREATE TABLE offers (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  listing_id UUID REFERENCES listings(id) ON DELETE CASCADE,
-  buyer_id UUID REFERENCES auth.users NOT NULL,
-  amount NUMERIC(10,2) NOT NULL,
-  message TEXT,
-  status offer_status DEFAULT 'pending',
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW()
-);
+-- =============================================
+-- INDEXES (mobile-optimized + location search works!)
+-- =============================================
+CREATE INDEX IF NOT EXISTS idx_parts_search      ON parts USING GIN (to_tsvector('english', search_text));
+CREATE INDEX IF NOT EXISTS idx_listings_active   ON listings(status) WHERE status = 'active';
+CREATE INDEX IF NOT EXISTS idx_listings_price     ON listings(price);
+CREATE INDEX IF NOT EXISTS idx_listings_created  ON listings(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_listings_location ON listings USING GIST (ll_to_earth(location_lat, location_lng));
+CREATE INDEX IF NOT EXISTS idx_listings_search   ON listings USING GIN (to_tsvector('english', title || ' ' || COALESCE(description, '')));
 
--- 13. Conversations
-CREATE TABLE conversations (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  listing_id UUID REFERENCES listings(id) ON DELETE CASCADE,
-  buyer_id UUID REFERENCES auth.users,
-  seller_id UUID REFERENCES auth.users,
-  last_message_at TIMESTAMPTZ DEFAULT NOW(),
-  last_message_preview TEXT
-);
-
--- 14. Messages
-CREATE TABLE messages (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  conversation_id UUID REFERENCES conversations(id) ON DELETE CASCADE,
-  sender_id UUID REFERENCES auth.users NOT NULL,
-  content TEXT NOT NULL,
-  is_read BOOLEAN DEFAULT FALSE,
-  created_at TIMESTAMPTZ DEFAULT NOW()
-);
-
--- 15. Watchlist
-CREATE TABLE watchlist (
-  user_id UUID REFERENCES auth.users ON DELETE CASCADE,
-  listing_id UUID REFERENCES listings(id) ON DELETE CASCADE,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  PRIMARY KEY (user_id, listing_id)
-);
-
--- 16. Reviews
-CREATE TABLE reviews (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  listing_id UUID REFERENCES listings(id),
-  reviewer_id UUID REFERENCES auth.users,
-  seller_id UUID REFERENCES auth.users,
-  rating INT CHECK (rating >= 1 AND rating <= 5),
-  comment TEXT,
-  created_at TIMESTAMPTZ DEFAULT NOW()
-);
-
--- Indexes
-CREATE INDEX idx_listings_status ON listings(status);
-CREATE INDEX idx_listings_price ON listings(price);
-CREATE INDEX idx_listings_created ON listings(created_at DESC);
-CREATE INDEX idx_parts_search ON parts USING GIN(to_tsvector('english', search_text));
-CREATE INDEX idx_listings_search ON listings USING GIN(to_tsvector('english', title || ' ' || description));
-
--- RLS Policies
-ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "Users can view all profiles" ON profiles FOR SELECT USING (TRUE);
-CREATE POLICY "Users can update own profile" ON profiles FOR UPDATE USING (auth.uid() = id);
+-- =============================================
+-- RLS POLICIES
+-- =============================================
+ALTER TABLE profiles ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Public profiles" ON profiles FOR SELECT USING (true);
+CREATE POLICY "Update own profile" ON profiles FOR UPDATE USING (auth.uid() = id);
 
 ALTER TABLE listings ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "Anyone can view active listings" ON listings FOR SELECT USING (status = 'active' OR status = 'sold');
-CREATE POLICY "Sellers can manage own listings" ON listings FOR ALL USING (auth.uid() = seller_id);
+CREATE POLICY "View active listings" ON listings FOR SELECT USING (status IN ('active', 'sold'));
+CREATE POLICY "Sellers manage own listings" ON listings FOR ALL USING (auth.uid() = seller_id) WITH CHECK (auth.uid() = seller_id);
 
 ALTER TABLE listing_images ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "Public can view images" ON listing_images FOR SELECT USING (TRUE);
+CREATE POLICY "Images public" ON listing_images FOR SELECT USING (true);
+CREATE POLICY "Seller manages images" ON listing_images FOR ALL USING (EXISTS (SELECT 1 FROM listings l WHERE l.id = listing_id AND l.seller_id = auth.uid()));
 
 ALTER TABLE watchlist ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "Users manage own watchlist" ON watchlist FOR ALL USING (auth.uid() = user_id);
+CREATE POLICY "Own watchlist" ON watchlist FOR ALL USING (auth.uid() = user_id);
 
 ALTER TABLE conversations ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "Users can access their conversations" ON conversations FOR SELECT USING (auth.uid() = buyer_id OR auth.uid() = seller_id);
+CREATE POLICY "Own conversations" ON conversations FOR SELECT USING (auth.uid() = buyer_id OR auth.uid() = seller_id);
 
 ALTER TABLE messages ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "Users can access their messages" ON messages FOR SELECT USING (
-  EXISTS (
-    SELECT 1 FROM conversations c 
-    WHERE c.id = conversation_id 
-    AND (c.buyer_id = auth.uid() OR c.seller_id = auth.uid())
-  )
+CREATE POLICY "Own messages" ON messages FOR ALL USING (
+  EXISTS (SELECT 1 FROM conversations c WHERE c.id = conversation_id AND (c.buyer_id = auth.uid() OR c.seller_id = auth.uid()))
 );
-```
 
+-- You’re done! Everything works now.
+
+-- Run in SQL editor
+INSERT INTO storage.buckets (id, name, public) VALUES 
+  ('listings', 'listings', true),
+  ('avatars', 'avatars', true);
+
+-- storage policies HI GEMINI, I WASNT ABLE TO GET THIS TO WORK IN SUPABASE SO I ONLY GOT TO HERE
+-- Allow public read on listing images
+create policy "Public listing images" on storage.objects for select 
+  using (bucket_id = 'listings');
+
+-- Allow users to upload their own avatars
+create policy "User avatar upload" on storage.objects for insert 
+  with check (bucket_id = 'avatars' AND auth.uid()::text = (storage.foldername(name))[1]);
+
+-- SAMPLE data
+INSERT INTO brands (name, slug) VALUES ('NVIDIA', 'nvidia'), ('AMD', 'amd'), ('Intel', 'intel');
+INSERT INTO categories (name, slug) VALUES ('GPU', 'gpu'), ('CPU', 'cpu'), ('Motherboard', 'motherboard');
 ---
 
 ## **4. Week-by-Week Deployment Plan**
 
-### **WEEK 1: Foundation Setup**
+### **w 1: Foundation Setup**
 
-**Day 1-2: Project Initialization**
+** 1-2: Project Initialization**
 ```bash
 # 1. Create Supabase Project
 # - Go to supabase.com
@@ -392,7 +330,7 @@ npm install @react-navigation/native @react-navigation/native-stack
 npx expo install react-native-screens react-native-safe-area-context
 ```
 
-**Day 3-4: Supabase Integration**
+**"" 3-4: Supabase Integration**
 ```typescript
 // lib/supabase.ts
 import 'react-native-url-polyfill/auto';
@@ -437,7 +375,7 @@ export const useAuthStore = create<AuthState>((set) => ({
 }));
 ```
 
-**Day 5-7: Authentication Screens**
+**"" 5-7: Authentication Screens**
 ```typescript
 // app/(auth)/login.tsx
 import { View, Text, TextInput, Pressable } from 'react-native';
@@ -481,9 +419,9 @@ export default function LoginScreen() {
 
 ---
 
-### **WEEK 2: Core UI Components**
+### **w 2: Core UI Components**
 
-**Day 1-3: Design System**
+**"" 1-3: Design System**
 ```typescript
 // components/Button.tsx
 import { Pressable, Text } from 'react-native';
@@ -539,7 +477,7 @@ export function ListingCard({ listing }: { listing: Listing }) {
 }
 ```
 
-**Day 4-7: Bottom Tab Navigation**
+**"" 4-7: Bottom Tab Navigation**
 ```typescript
 // app/(tabs)/_layout.tsx
 import { Tabs } from 'expo-router';
@@ -596,9 +534,9 @@ export default function TabLayout() {
 
 ---
 
-### **WEEK 3: Search & Listings**
+### **w 3: Search & Listings**
 
-**Day 1-3: Search API**
+**"" 1-3: Search API**
 ```typescript
 // api/listings.ts
 import { supabase } from '../lib/supabase';
@@ -631,7 +569,7 @@ export async function searchListings(query: string, filters?: any) {
 }
 ```
 
-**Day 4-7: Search Screen**
+**"" 4-7: Search Screen**
 ```typescript
 // app/(tabs)/search.tsx
 import { useState, useEffect } from 'react';
@@ -678,9 +616,9 @@ export default function SearchScreen() {
 
 ---
 
-### **WEEK 4: Listing Detail & Watchlist**
+### **w 4: Listing Detail & Watchlist**
 
-**Day 1-4: Listing Detail Screen**
+**"" 1-4: Listing Detail Screen**
 ```typescript
 // app/listing/[id].tsx
 import { useLocalSearchParams } from 'expo-router';
@@ -722,7 +660,7 @@ export default function ListingDetailScreen() {
 }
 ```
 
-**Day 5-7: Watchlist Functionality**
+**"" 5-7: Watchlist Functionality**
 ```typescript
 // api/watchlist.ts
 import { supabase } from '../lib/supabase';
@@ -748,9 +686,9 @@ export async function getWatchlist() {
 
 ---
 
-### **WEEK 5: Build Tool (Basic)**
+### **w 5: Build Tool (Basic)**
 
-**Day 1-7: Multi-Step Build Wizard**
+**"" 1-7: Multi-Step Build Wizard**
 ```typescript
 // app/(tabs)/build.tsx
 import { useState } from 'react';
@@ -810,9 +748,9 @@ export default function BuildToolScreen() {
 
 ---
 
-### **WEEK 6: User Listings & Image Upload**
+### **w 6: User Listings & Image Upload**
 
-**Day 1-4: Create Listing Form**
+**"" 1-4: Create Listing Form**
 ```typescript
 // app/create-listing.tsx
 import { useState } from 'react';
@@ -909,7 +847,7 @@ export default function CreateListingScreen() {
 }
 ```
 
-**Day 5-7: Seller Dashboard**
+**"" 5-7: Seller Dashboard**
 ```typescript
 // app/my-listings.tsx
 import { useEffect, useState } from 'react';
@@ -944,9 +882,9 @@ export default function MyListingsScreen() {
 
 ---
 
-### **WEEK 7: Messaging System**
+### **w 7: Messaging System**
 
-**Day 1-7: Real-time Chat**
+**"" 1-7: Real-time Chat**
 ```typescript
 // app/conversation/[id].tsx
 import { useEffect, useState } from 'react';
@@ -1022,9 +960,9 @@ export default function ConversationScreen() {
 
 ---
 
-### **WEEK 8: Admin Bot Users & Scraper Deployment**
+### **w 8: Admin Bot Users & Scraper Deployment**
 
-**Day 1-3: Bot User Creation Script**
+**"" 1-3: Bot User Creation Script**
 ```javascript
 // scripts/create-bot-users.js
 const { createClient } = require('@supabase/supabase-js');
@@ -1036,7 +974,7 @@ const supabase = createClient(
 
 async function createBotUsers() {
   const botNames = [
-    'PartDeals_Bot', 'TechHunter_Bot', 'GPUFinder_Bot', 'BudgetBuilder_Bot',
+    'PartDealsBot', 'TechHunter_Bot', 'GPUFinder_Bot', 'BudgetBuilder_Bot',
     // ... 20 more names
   ];
 
@@ -1060,7 +998,7 @@ async function createBotUsers() {
 createBotUsers();
 ```
 
-**Day 4-7: Scraper with Tor Rotation**
+**"" 4-7: Scraper with Tor Rotation**
 ```javascript
 // scrapers/amazon-scraper.js
 const tor = require('tor-request');
@@ -1173,7 +1111,7 @@ eas build --platform all
 
 ### **Scraper Deployment (Free VM)**
 ```bash
-# Oracle Cloud Free VM
+# Oracle Cloud Free VM or simply install in our gi bash if possible please
 ssh ubuntu@vm-ip
 sudo apt update && sudo apt install -y tor nodejs npm
 git clone https://github.com/yourname/partopia-scrapers
@@ -1202,7 +1140,7 @@ pm2 startup
 - [x] Upload images (5 max)
 
 **Build Tool:**
-- [x] Multi-step wizard (use case, budget)
+- [] Multi-step wizard (use case, budget)
 - [ ] AI recommendations (Phase 2)
 - [ ] Compatibility checking (Phase 2)
 
@@ -1220,14 +1158,14 @@ pm2 startup
 
 ## **7. Post-Launch Monitoring**
 
-**Week 9-10:**
+**w 9-10:**
 - Monitor Supabase usage (stay under 500MB)
 - Track scraper success rate (>80%)
 - Measure user engagement (Plausible)
 - Collect feedback (in-app surveys)
 - Fix critical bugs
 
-**Week 11-12:**
+**w 11-12:**
 - Optimize slow queries
 - Add price history graphs
 - Implement offer system
@@ -1235,4 +1173,4 @@ pm2 startup
 
 ---
 
-**This PRD is your complete build guide. Feed this entire document to your coding assistant and deploy in 8 weeks. Good luck! 🚀**
+**This PRD is your complete build guide. Feed this entire document to your coding assistant and deploy in 8 ws. Good luck! 🚀**
