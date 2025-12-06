@@ -1,4 +1,8 @@
 # Welcome to your Expo app 👋
+<!-- 
+NOTES
+- remove console.log from lib\supabase.ts
+ -->
 
 This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
 
